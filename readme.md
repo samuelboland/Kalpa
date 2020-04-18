@@ -18,7 +18,7 @@ with the hope that it can learn how to generate plausible normal maps for
 novel input data. 
 
 ## Name
-The network is intended to be used to generate normal maps for texture in the 
+The network is intended to be used to generate normal maps for textures in the 
 video game The Elder Scrolls III: Morrowind. Specifically, the open-source
 reimplementation and extension of the original 2002 Morrowind Engine: OpenMW. 
 
