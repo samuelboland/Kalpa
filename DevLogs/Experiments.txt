@@ -59,4 +59,19 @@ I don't need to figure out how to implement them myself.
 With very little idea of which one to try first, I opted to use on the options
 for Gradient Penalty Weight. Specifically, I am using the WGAN-GP option. This
 option is described here: https://arxiv.org/abs/1704.00028.
-  
+
+================================================================================
+FIX: Discriminator Dimensionality
+================================================================================
+I just realized that the discriminator only had a shape value of (256,256,3), but
+the generator makes outputs with a dimensionality of (256,256,4). In effect, I think
+that the discriminator was ignoring the alpha channel!
+
+I had updated all of the Conv2D layers in the discriminator to use a
+dimensionality of 4, but the first layer was using this argument:
+
+   h = inputs = keras.Input(shape=input_shape)
+
+Which was receiving the incorrect shape. How was alpha information even making
+it through? Was it learning to encode it somehow in the first three channels?
+That's crazy.    

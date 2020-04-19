@@ -73,7 +73,7 @@ def ResnetGenerator(input_shape=(256, 256, 4),
         h = tf.nn.relu(h)
 
 
-    #4 Replacement
+    #4 Replacement, implementing upsize-reconv instead of deconv.
     #for _ in range(n_downsamplings):
     #    dim //= 2
     #    h = keras.layers.UpSampling2D(size=(2,2),data_format=None,interpolation='nearest')(h)
@@ -89,7 +89,7 @@ def ResnetGenerator(input_shape=(256, 256, 4),
     return keras.Model(inputs=inputs, outputs=h)
 
 
-def ConvDiscriminator(input_shape=(256, 256, 3),
+def ConvDiscriminator(input_shape=(256, 256, 4),
                       dim=64,
                       n_downsamplings=3,
                       norm='instance_norm'):
