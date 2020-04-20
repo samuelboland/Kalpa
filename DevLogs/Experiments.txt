@@ -74,4 +74,15 @@ dimensionality of 4, but the first layer was using this argument:
 
 Which was receiving the incorrect shape. How was alpha information even making
 it through? Was it learning to encode it somehow in the first three channels?
-That's crazy.    
+That's crazy.   
+
+================================================================================
+IDEA: Allowing for larger inputs within memory constraints
+================================================================================
+I would like for the network to be able to work on images with larger dimensions
+than 256x256. However, I cannot simply tell it to use larger images, since my
+video card doesn't have enough VRAM to handle it. 
+
+So, what if I feed it larger inputs, but then immediately squash it down to
+256x256 after the input, and blow it back up to 512x512 immediately before the
+output, for both the generator and the discriminator? 
