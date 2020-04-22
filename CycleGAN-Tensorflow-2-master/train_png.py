@@ -75,6 +75,7 @@ A_B_dataset_test, _ = data.make_zip_dataset(A_img_paths_test, B_img_paths_test, 
 # ==============================================================================
 
 G_A2B = module.ResnetGenerator(input_shape=(args.crop_size, args.crop_size, 4))
+
 G_B2A = module.ResnetGenerator(input_shape=(args.crop_size, args.crop_size, 4))
 
 D_A = module.ConvDiscriminator(input_shape=(args.crop_size, args.crop_size, 4))
@@ -97,9 +98,11 @@ D_optimizer = keras.optimizers.Adam(learning_rate=D_lr_scheduler, beta_1=args.be
 @tf.function
 def train_G(A, B):
     with tf.GradientTape() as t:
-
-
-
+        print("About to start A2B Generator")
+        print("\n")
+        print("\n")
+        print("\n")
+        print("\n")
         A2B = G_A2B(A, training=True)
         B2A = G_B2A(B, training=True)
         A2B2A = G_B2A(A2B, training=True)
@@ -234,7 +237,7 @@ with train_summary_writer.as_default():
             tl.summary({'learning rate': G_lr_scheduler.current_learning_rate}, step=G_optimizer.iterations, name='learning rate')
 
             # sample
-            if G_optimizer.iterations.numpy() % 100 == 0:
+            if G_optimizer.iterations.numpy() % 50 == 0: # Originally set to 100
                 A, B = next(test_iter)
                 A2B, B2A, A2B2A, B2A2B = sample(A, B)
                 img = im.immerge(np.concatenate([A, A2B, A2B2A, B, B2A, B2A2B], axis=0), n_rows=2)

@@ -86,3 +86,22 @@ video card doesn't have enough VRAM to handle it.
 So, what if I feed it larger inputs, but then immediately squash it down to
 256x256 after the input, and blow it back up to 512x512 immediately before the
 output, for both the generator and the discriminator? 
+
+Update, 4/20/2020: That is working, sort of. It won't work with the WGAN-GP
+mode because of a lack of a resize function for a gradient. Or something. I'm
+just trying it out with no special loss functions for now, and it's sort of
+working. 
+
+I wonder, though, if that last upscale at the end is causing issues. The
+generated textures are, for lack of a better term, sort of pixely. I wonder if I
+could instead replace that final one with a deconv, sort of like how it upscales
+in the middle of the network? Does that cause substantial VRAM usage? I have no
+idea. I'll try it after this batch with my first attempt is complete. 
+
+
+================================================================================
+IDEA: Adding additional dimension to tensor after image load
+================================================================================ 
+
+
+

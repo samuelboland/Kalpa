@@ -1,0 +1,366 @@
+================================================================================
+Dev Log for branch largerInputs
+================================================================================
+
+First attempt: 
+	Sandwiching network between resize statements
+
+--------------------------------------------------------------------------------
+
+Second attempt: 
+	Realized that the memory bottleneck was the multiple
+downsamplings, moved resize statements deeper into network.
+
+--------------------------------------------------------------------------------
+
+Third attempt: 
+
+	Realized I could maybe do better resizes with a conv2d transpose
+instead. Trying that now. 
+
+That seems to be working, and it lets me use the WGAN and WGAN-GP methods as
+well. I replaced both resizes with conv2d and conv2d transposes, in both the
+generator and discriminator. Let's see if this has better results. Hopefully,
+due to the use of an activation at that level of the network, it can learn from
+these operations explicitly. 
+
+I do expect checkerboarding to become more of a problem from this.
+
+Update on third attempt: It's mostly working, but I am getting a TON of
+checkerboarding. And the holes are here with a vengeance. I'm going to try
+adjusting the kernel size of my new convlution/deconvolution layers to be 4
+instead of 3. That would mean that the stride can be evenly divided into the
+kernel, which...feels better? I'm not sure. 
+
+Update: Tried increasing the number of blocks, which caused the model to run out
+of memory. I wonder if that is the leading cause of memory usage? What if I
+remove all my extra code, feed it a 512x 512 image, and lower the number of
+blocks? 
+
+	Well what do you know, it's working. I wonder how the results will be?
+
+	Bad. The results are bad. Abandoning this for now. 
+
+
+
+Idea: Only rescale in generator, leave discriminator will full input.
+This works. I'm not seeing improvements, but it works. 
+
+
+--------------------------------------------------------------------------------
+Fourth attempt: 
+
+	Adversarial loss mode: Normal (lsgan)
+	Gradient penalty mode: None
+	Input size: 542
+	Crop size: 512
+
+	Combining the change from resize to convolutions/deconvolutions, setting
+all kernels to be even multiples of strides, and removing the resizing
+operations from the discriminator. 
+
+	Changing out the deconvolution layers to resize-convs does remove quite
+a bit of the high-frequency checkerboarding. One such deconv layer does still
+exist to transform the final object back to 512x512 in the generator. Removing
+that lead to very odd results. 
+
+	This network is converging far less quickly than I'm used to. I believe
+that it is performing better over time - the cycle loss metrics seem to bear
+this out, and the network is stable insofar as neither the discriminators nor
+the generators are gaining an obvious upper hand. 
+
+	However, it is not converging onto a desired output. The images are
+filled with those holes, and weird diagonal lines like scars through the
+translated images. 
+
+	I will allow this to run to completion. It is snticeably slower than the
+previous iterations of the network. I want to give it a fair shot.    
+
+	Idea: Adjusting the perceptive field within the blocks layer. 
+	Right now, the residual_block layers all use a kernel size of 4. 
+	What if that changed per layer? Or used dilational kernels, where the
+	dilation changes per block? 
+
+================================================================================
+RESET: I got ahead of myself.
+================================================================================
+
+Ok. So. I started messing around with too many things at once, and I was
+confusing different effects. I need to be more scientific about this. 
+
+
+I would like to do the following tests. 
+
+ - Naive resizing, vanilla network
+ - Naive resizing, deconvolutions replaced with resize-reconv
+ - Naive downscaling, vanilla network, deconv upscaling
+ - Naive downscaling, vanilla network, resize-reconv upscaling
+ - Naive downscaling, resize-reconv all deconvolutions including upscaling
+ - Convolutional downscaling, vanilla network
+ - Convolutional downscaling, vanilla network, deconv upscaling
+ - Convolutional downscaling, resize-reconv elsewhere
+
+The last upscale is honestly not that interesting to me now that I think about
+it. It's just a linear resize. The artifacts that are making it through to that
+step would still be there regardless of the method of resizing. In the current
+manner of using the naive nearest neighbor resize, they're just larger. 
+
+
+I have reset my experiment to basically the beginning. Here's the setup:
+
+--------------------------------------------------------------------------------
+Experiment 1 - Vanilla 512 Network with Naive Resizing
+--------------------------------------------------------------------------------
+
+	512 -> 256 method: Naive resize at step 0.5 and 4.5 in generator.
+	                   Nothing in discriminator. 
+	Adversaral loss mod: None (lsgan)
+	Gradient Penalty Mode: None
+	Input size: 542
+	Crop size: 512
+
+All other parameters have been returned to their default values, except for the
+amount of channels in the image - I still expect to have 4 due to requiring the
+alpha layer. 
+
+I am now running the network on my standard training set. I should really get
+some more training data in there though. It's a very small set.
+
+Ok, more training images added. I think I made some good picks here. I have
+restarted the training, and it's looking promising. 
+
+I'd like to get the overall function of the network working, and then try to
+eliminate the checkerboarding through careful and controlled experimentation
+
+Ok, more training images added. I think I made some good picks here. I have
+restarted the training, and it's looking promising. 
+
+I'd like to get the overall function of the network working, and then try to
+eliminate the checkerboarding through careful and controlled experimentation.
+
+
+--------------------------------------------------------------------------------
+Experiment 2 - Resize-reconv
+--------------------------------------------------------------------------------
+The results of that first run were promising. However, some issues remain.
+Primarily, there are strange artifacts coming from the generator - repeating
+large-scale patterns like diagonal lines spaced almost evenly throughout the
+generated image. 
+
+	512 - 256 method: Naive resize at step 0.5 and 4.5 in the generator. 
+	Adversarial loss mode: None
+	Gradient Penalty mode: none
+	Input size: 542
+	Crop size: 512
+	Deconv: replaced with resize-conv
+		Strides: 1
+		Kernel: 3
+		Padding: Same
+
+Results: Meh. It looks like the checkerboarding is somewhat decreased, but the
+large artifacts from the previous experiment are still there. 
+
+I'm wondering if it has to do with the training data. The inputs that I'm using
+for Normals come from all three ES games. Some of them are quite different. I'm
+aiming for a style like Lysol's normals - but the ones from Skyrim are quite
+different. I'm going to try removing some of those from the input data and
+retrying Experiment 2. 
+
+
+--------------------------------------------------------------------------------
+Experiment 2.5 - Paring down the input images
+--------------------------------------------------------------------------------
+
+This is the same as Experiment 2. I have pared down the training data to
+examples that look better, in my opinion.
+
+This isn't producing any exceptional results so far, but I'm only at 36%. 
+
+================================================================================
+Experiment 3 - A deeper discriminator
+================================================================================
+I have so far been neglecting the discriminator. I've done some reading on it,
+and I think that this might be part of the problem with the 512x512 network. 
+
+The discriminator is a Patch GAN. That is, it takes an input and breaks it down
+into patches, and for each patch returns a probability that it is "real." The
+sums of all of these probabilities turn into the discriminator score. 
+
+Since I have increased the size of the input, but have not otherwise touched the
+network, the "patch" size is now double what it was originally. 
+
+I have increased the number of downsampling steps to 4, from 3. This adds
+another convolutional layer in the discriminator, and will result in it looking
+at smaller patches.  
+
+Results: So far, this seems to be a good improvement. I'm at iteration 2350, 13%
+complete, and the output is better than it was at a similar stage in the
+previous attempts.
+
+Halting at Epoch 109. Mode collapse. The B Discriminator loss slowly dropped to
+0, and the A2B generatos loss went to 1. Damn. It was doing quite well. 
+
+
+================================================================================
+Experiment 4 - Resize-reconvolution in step 4.5
+================================================================================
+
+My current method of reupscaling the image to 512x512 in the generator is a
+naive Nearest Neighbor image resize. This may have the effect of taking any
+errors that are present and blowing them up to a larger size. 
+
+An alternative method of increasing the size of the image is a
+deconvolution/Conv2DTranspose. However, I have replaced such operations with a
+resize reconv. 
+
+So instead of do a Conv2D transpose is place of a resize up, I will simply add a
+Conv2D layer with a ReLu activation after it in step 4.5. The stride will be 1,
+so it will not affect the 2D size of the output. The filters will be same as the
+input. 
+
+I am trying a kernel_size of 2 and a stride of 1, with a dilation_rate of 2.
+Hopefully this allows the perceptual field to be larger, so that it can encode
+some of the more broad-scale information in the image.  
+
+Results: This isn't working, I'm running out of memory. I am going to try
+reducing the number of residual blocks in the generator to 8, from 9. 
+
+Good, that freed up enough memory for it to work. 
+
+I'm worried that this actually is a bad idea. By putting a dilated kernel, it
+can see more of the broad scale of the image, but it won't be able to "see" fine
+detail. So the small structures won't ever survive to the end of the network,
+because I wipe them out by the time they reach it. 
+
+What if I had dilations inside of the residual blocks? And maybe the size of
+those dilations could decrease until it reaches the center? 
+
+Turns out there has been research done into such "dilated residual networks." 
+cs.princeton.edu/~funk/drn.pdf
+
+
+Results: Cancelled at 6%
+
+================================================================================
+Experiment 5: Dilated Residual Blocks
+================================================================================
+
+In this experiment, I am going to implement dilation with the residual layer
+itself. The final upscale has been returned to being a naive resize. If this
+works, I could change that to a resize-conv2D with a kernel or 2 or 3 and a
+stride of 1 to "smooth out" the final layer a bit. 
+
+There are papers that discuss this. One of them discusses a Spatial Pyramid
+Attention Pool (SPAP). It implements coarse-to-fine convolutions IN PLACE of the
+residual block network. 
+
+see arxiv.org/pdf/1901.06322.pdf
+
+Basically, you take the standard input, and generate n convolutions from it. The
+first one uses a dilation rate of n-1, and the second uses n-2. You then "fuse"
+those with an "attentive fuse" layer. 
+
+The attentive fuse layer is composed of two inputs and one output. Something
+like this: 
+
+    def _attentive_fuse(a,b):
+        dim = a.shape[-1]
+        # Attempting to implement https://arxiv.org/pdf/1901.06322.pdf
+        # Spatial Pyramid Attentive Pooling
+        n = tf.concat(a,b)
+        n = keras.layers.Conv2D(dim,kernel=1,strides=1, padding='same',
+use_bias=False)(n)
+        a = keras.layers.Multiply(a,n)
+        b = keras.layers.Multiply(b,n)
+        return keras.layers.add([a,b])
+
+That should work. 
+
+Now I need to implement the multiple levels of the pyramid. I could start with
+just one, but it would be nice to specify. Something like...
+
+def spap(h, num_levels):
+	levels = num_levels
+	for _ in range(num_levels):
+		a = keras.layer
+
+================================================================================
+Experiment 6: Replacing ResNet with SPAP
+================================================================================
+
+After quite a bit of consternation and annoyance, I managed to change out the
+ResNet portion of the network with the SPAP style network - Spatial Pyramid
+Attentive Pooling. At least, I think I have implemented it. The paper is not
+entirely clear, but I think that what I did makes sense. The code is running at
+least! 
+
+AND the network didn't immediately go into mode collapse, AND it's returning
+vaguely correct results in the first few iterations. Wow. 
+
+Setup: 
+	Adversarial Loss Mode: Standard
+	Gradient Loss Mode: None
+	Image Size: 512
+	512 Method: Naive Resize at steps 0.5 and 4.5. 
+	SPAP Levels: 3
+	SPAP Dilation Kernel Size: 2
+
+I am noting a periodic mode collapse in the B discriminator. It hits a 0%
+success rate, and then manages to pull back somehow. 
+
+Hm, it's not pulling back this time. Experiment complete, moving on to
+Experiment 7. 
+
+================================================================================
+Experiment 7: SPAP Generator + Discriminator 
+================================================================================
+
+The discriminator has been losing recently. I am going to add SPAP to the
+discriminator as well. Currently, the method by which it determines whether an
+image is "real" or not involves creating multiple "patches," which are then
+independently evaluated. This method is like a markov chain, as noted in
+https://arxiv.org/pdf/1901.06322.pdf, and does not give the discriminator a
+holistic view of the image. 
+
+Experiment 7 will be the same as experiment 6, but with an SPAP in the
+discriminator as well. 
+
+Mode collapse. But, it works. Same type - B2A G loss spikes to 1, A D loss goes
+to 0. 
+
+Wait a minute - in the SPAP function, I'm using regular ReLu. I should be using
+LeakyReLu for the discriminator. 
+
+Let's adjust. 
+
+--------------------------------------------------------------------------------
+Experiment 7.5: Leaky ReLu in Discriminator
+--------------------------------------------------------------------------------
+
+Exact same as above, but I added a conditional in the SPAP function to use Leaky
+ReLu if it's being called from the discriminator. 
+
+These graphs are interesting. The discriminator looks to be collapsing almost
+immediately, but is now slowly climbing back up. It then dipped down again, and
+is now again slowly climbing. It's like it's falling into odd holes sometimes. 
+
+
+================================================================================
+Experiment 8: Changing Resize Method
+================================================================================
+I'm seeing a lot of these semi-diagonal repeating artifacts. They appear in both
+the A2B and B2A generator, which makes me think that it's something intrinsic in
+the architecture. Perhaps it has something to do with the direction that the
+image is linearly resized? 
+
+Actually, I'm going to go ahead and merge this. This PR is getting a little
+beyond the original scope. I successfully allowed the network to work on 512x512
+inputs without increasing memory usage. 
+
+
+================================================================================
+Experiment ?: SPAP Network + wgan adversarial loss mode
+================================================================================
+
+
+

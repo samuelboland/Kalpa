@@ -1,0 +1,12 @@
+================================================================================
+IDEA: Meshes
+================================================================================
+I wonder if it's possible to work with meshes in this sort of network? Looks
+like the information is stored in Hexadecimal, which encodes values between
+0-255, just like the decimal representation of images that this network works
+on. 
+
+Is it possible to dream up meshes based on input textures? Probably not, but it
+might be fun to try. Would need a loss function that verifies the validity of
+the mesh file and disallows any that don't meet the specifications required to
+load in game...
