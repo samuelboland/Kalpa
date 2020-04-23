@@ -1,0 +1,336 @@
+================================================================================
+		removeHoles Devlog
+================================================================================
+Explanation
+================================================================================
+
+It is difficult to gauge the efficacy of the network due to the prevalence of
+these "hole" artifacts. They are splotches that appear early in training and
+never quite leave. 
+
+I have some theories about them. It could be localized mode collapse - this
+might occur in the generator in some convolution somewhere. It could also be the
+way that the network encodes some information necessary to transform the image
+back to the original, and that is just the minimally invasive way to do it, when
+compared to other ways that it has tried. 
+
+In order to try to suss out what it is, I am going to pull the network apart. I
+will alter the train_png file until only the bare essentials of the network
+remain. From there, I will add pieces back until the black holes show up -
+assuming they haven't already. 
+
+================================================================================
+Experiment 1: Hollowing Out the Generator
+================================================================================
+
+I have removed almost everything from the Generator. The original architecture
+was: 
+
+input -> downscale(256) -> conv2d(d64,k7,s1) -> 2* downsampleConv -> spap(5) ->
+2*upsampleconv -> resize/reconv(512) -> return
+
+The network now is: 
+
+input -> return
+
+This will be awful. There is no possible way for it to learn.  
+
+I am running the network with no wgan and wgan-gp modes, since that is what I
+plan to use going forward. 
+
+Result: Good, it worked as expected. The input is the same as the output, and
+it's not learning anything. 
+
+================================================================================
+Experiment 2: Slowly rebuilding the generator
+================================================================================
+
+I will list out what the architecture is for each attempt, and discuss. 
+
+The discriminator remains unchanged through all of this. 
+
+--------------------------------------------------------------------------------
+Experiment 2.1
+--------------------------------------------------------------------------------
+
+Architecture: input -> (step5) Conv2d(d4,k7,s1) -> output
+
+No holes here. It's just doing simple color transformations, since that's all
+it's capable of. It's like a consistent recolorization over the whole image.
+
+--------------------------------------------------------------------------------
+Experiment 2.2
+--------------------------------------------------------------------------------
+
+Architecture: input -> resize(256) -> (step4.5) upsize/reconv(d64,k2,s1) -> (step5)
+
+No holes here either. It's actually already learning and highlighting edges,
+with a notable difference between the bottom edges and the top, which probably
+comes from the training set being of mostly walls. 
+
+It is already losing some information here around the fine details...
+
+Interesting that this is what's doing it. I suppose that makes sense, with the
+kernel size being 2. Future investigations should look into this as a potential
+problem with fine details. 
+
+--------------------------------------------------------------------------------
+Experiment 2.3
+--------------------------------------------------------------------------------
+
+input -> resize(256) -> (step1) conv2d(d64,k7,s1) -> (step4.5) -> (step5)
+
+I'm not seeing holes here, but I am seeing that a lot of the finer details are
+being wiped out. It might be worth experimenting on whether to move the SPAP
+layer to before this, right after the initial input/resize, so that it can
+extract the size information right away. 
+
+I am actually seeing "shadows" that might eventually blow up into holes, but
+it's hard to tell. It looks like they are small features from the original image
+that somehow become exaggerated in each generator. 
+
+Interestingly, with this architecture the images almost look like they are doing
+binary classifications. The outputs all have only two colors, and those colors
+map pretty well onto depth. Very impressive. 
+
+--------------------------------------------------------------------------------
+Experiment 2.4
+--------------------------------------------------------------------------------
+
+The current setup is: 
+
+input -> resize(256) -> step 1 -> step 4.5 -> step 5
+
+We are skipping the multiple downsampling, spap, and multiple upsampling layers.
+I don't think that SPAP is responsible, since the holes were present prior to
+this. I'm going to try adding step 2, the multiple downsizing. 
+
+input -> resize(256) -> step1 -> step2 -> step 4.5 -> step 5
+
+It will do 2 downsizes. 
+
+Ok, I'm running out of memory. I will do 1 downsize. Nope, still out of memory.
+What? 
+
+
+I'll deal with that some other way...let's skip and go straight to the SPAP
+network. 
+
+REVISED ARCH: 
+
+input -> resize(256) -> step 1 -> step 3(spap1) -> step 4.5 -> step 5
+
+SPAP at level 1 just collapses to being a few multiplications and additions of
+the tensor, and a single stride 1-kernel conv2d with no dilation. 
+
+HOLES! I have holes. Finally. But why? I had holes before adding the SPAP
+network...so it must be something to do with the Conv2Ds. 
+
+The holes DO start out like I thought in Experiment 2.3 - the holes seem to
+start out as small "shadows," failures in translating the image from one domain
+into another, that end up getting blown out of proportion by later layers rather
+than being removed. 
+
+This experiment was a success. But let's test this out. If this is the case, if
+I remove the SPAP network and reimplement steps 2 and 4, to shrink and then
+expand the tensor, it should also give holes. 
+
+That's basically an autoencoder right? 
+
+Anyways. 
+
+--------------------------------------------------------------------------------
+Experiment 2.5
+--------------------------------------------------------------------------------
+
+For the sake of completeness, setting up this network. It should also result in
+holes. 
+
+input -> resize(256) -> step 1 -> step 2 -> step 4 -> step 4.5 :w
+-> step 5
+
+Oh yes - many, many holes. And they are immediately apparent. 
+
+================================================================================
+Experiment 3 - De-holing the Generator
+================================================================================
+--------------------------------------------------------------------------------
+Experiment 3.1
+--------------------------------------------------------------------------------
+
+
+These holes start out as small things that eventually grow and grow until they
+take over entire segments of the image. I don't really know how to get rid of
+them. What if I put the SPAP network first? Let it get a feel for the overall
+shape of the object, and then do other stuff? 
+
+Does the SPAP itself also introduce holes? Let's pare down the network yet
+again, leaving only input -> resize -> spap -> resize -> step 5 -> out
+
+Testing SPAP at level 3, the standard use case for me due to VRAM limits.a
+
+No holes to be found, but it's focusing on strange things. Actually, it is
+developing what look like "pre-holes" if anything. Small structures that might
+blow up over time. 
+
+Let's try an SPAP of 5, which is the amount suggested in the original paper.  
+
+Lots of pre-holes. It's also taking a while to converge on a decent
+representation of the space, but I've seen that behavior before in such a deep
+network. 
+
+The original paper suggested using a Coarse -> Fine order for the SPAP. That
+does mean though that the fine details have undergone very few convolutions
+compared to the very broad detail. Perhaps I could reverse that order. 
+
+Let's try that. 
+
+--------------------------------------------------------------------------------
+Experiment 3.2 - reversed SPAP
+--------------------------------------------------------------------------------
+
+Still a lot of pre-bubbles. 
+
+I'm going to change this to a level 3 spap to hopefully let it converge faster. 
+
+Altering the kernel size in the SPAP network to be 2 instead of 1. 
+
+Not helping. Changing it to 4. 
+
+Removing final layer, reshaping last conv2d upsize to give dim=output channels.
+Should change the last relu to a tanh probly. 
+
+Ok, changing reverse spap to an spap. 
+
+I'm sort of going fast here, but I want to try a bunch of things quickly. This
+is bad form, I know. 
+
+
+================================================================================
+Break
+================================================================================
+
+This is structural. Something in the structure of this network is creating and
+promulgating these issues. 
+
+I'm starting to wonder if, perhaps, the discriminator is at fault? Perhaps it is
+reinforcing these holes in some way? 
+
+I'm going to set the network back to a very basic configuration.
+
+The most basic network that I saw this behavior in was Experiment 2.3: 
+
+input -> resize(256) -> (step1) conv2d(d64,k7,s1) -> (step4.5) -> (step5)
+
+I will set the network back to that and test that this is still the case. I am
+reverting the SPAP changes. 
+
+I have decided to add an SPAP with rank 1 into the center here. That's when I
+first saw incontrovertible evidence of the hole problem. Actually, up to rank 3
+- that makes the holes easier to spot. 
+
+================================================================================
+Experiment 4: The Discriminator
+================================================================================
+
+This one might be harder to test, but let's see if I can figure it out. 
+
+I will first pull out the guts of the discriminator, leaving only:
+
+input -> (step3) Conv2d(d1,k4,s1) -> Output
+
+You know, it's kind of crazy how well this is working considering the lack of
+complexity in the Discriminator. 
+
+Like very crazy. 
+
+Ok, I'm going to add in an Identity Loss Weight of 50 here. See if that helps. 
+
+Adding the SPAP back into the discriminator doesn't seem to help honestly. Sure
+makes the net slower though. 
+
+Aha! Found a paper that finally mentions it. A blog here linked me to the
+Stylegan2 paper: https://www.gwern.net/Faces https://arxiv.org/abs/1912.04958
+
+I WAS RIGHT! IT IS STORING INFORMATION IN THE BLOBS. By creating small localized
+spikes in certain locations, it can effect the image in other locations! See
+section 2, "Removing Normalization Artifacts." 
+
+YES! 
+
+It has something to do with the normalization function. It throws away
+information that it should keep? 
+
+I have implemented this by copying it from the official Stylegan2
+implementation, here:
+https://github.com/NVlabs/stylegan2/blob/7d3145d23013607b987db30736f89fb1d3e10fad/training/networks_stylegan.py
+
+--------------------------------------------------------------------------------
+Experiment 4.1: Normalization Change
+--------------------------------------------------------------------------------
+
+I have implemented the normalization change suggested in the Stylegan2 paper. I
+am now training the network (which is still a pared down one). Let's see how it
+looks. 
+
+Interesting - the colors are now changing quite a bit. 
+
+I am going to set the network back to "Full strength," aka with all of the
+layers enabled. 
+
+
+Hm. The holes are not completely gone. Unfortunate. And now I'm getting some
+strange bands across the images. Iiinteresting. I'm going to let this one train
+for a while. 
+   
+
+--------------------------------------------------------------------------------
+Experiment 4.2: Normalization after SPAP
+--------------------------------------------------------------------------------
+
+I realized that the final layer of the SPAP did not return a normalized tensor.
+This changes that, and perform an activation as well. 
+
+I wonder if I'm overcomplicating this network. There are very many layers.
+Perhaps they are not all necessary. My experience messing with the discriminator
+and still getting believable results makes me think that perhaps many of these
+are added overhead, or worse, hurting the model. 
+
+
+Ran out of memory...perhaps I will try out a pared down network overnight. 
+
+Generator: 
+Input -> Resize(256) -> step1 ->  SPAP(3) -> Resize(512) -> Final layer
+
+Discriminator: 
+Input -> Spap(2) -> Step 3 -> Out
+
+
+Update: The pared-down network kept running out of memory. I decided to run the
+mostly-full one overnight. 
+
+The results were pretty good! The alpha channel could use additional
+differentiation. I am going to try keeping the generator the same, and
+increasing the depth of the discriminator. 
+
+In case I want to get back to it, the arch was:
+
+Input -> Resize(256) -> Step 1 -> Step 2 -> SPAP(3) -> Step 4 -> Upscale(512) ->
+Step 5
+
+And the discriminator was: 
+
+Input -> step 1 -> spap(2) -> step 3 -> output
+
+================================================================================
+Experiment 5: Ultra Batch
+================================================================================
+
+I have a giant 40GB training batch. I've been wanting to try it. Let's just give
+it a shot. 
+
+I am copying the network to my HDD since this is going to take a ton of space. 
+
+Actually, I've complted the main point of this branch - getting rid of holes.
+Merging. 
+

@@ -7,30 +7,50 @@ import tensorflow.keras as keras
 # ==============================================================================
 
 
-def _get_norm_layer(norm):
-    if norm == 'none':
-        return lambda: lambda x: x
-    elif norm == 'batch_norm':
-        return keras.layers.BatchNormalization
-    elif norm == 'instance_norm':
-        return tfa.layers.InstanceNormalization
-    elif norm == 'layer_norm':
-        return keras.layers.LayerNormalization
+# def _get_norm_layer(norm):
+#    if norm == 'none':
+#        return lambda: lambda x: x
+#    elif norm == 'batch_norm':
+#        return keras.layers.BatchNormalization
+#    elif norm == 'instance_norm':
+#        return tfa.layers.InstanceNormalization
+#    elif norm == 'layer_norm':
+#        return keras.layers.LayerNormalization
+# ==============================================================================
+#                   Replacing instance normalization
+#                   See: https://github.com/NVlabs/stylegan2/blob/7d3145d23013607b987db30736f89fb1d3e10fad/training/networks_stylegan.py
+# From StyleGAN2 paper https://arxiv.org/pdf/1912.04958.pdf
+# ==============================================================================
+
+def Norm(x):
+    epsilon = 1e-8
+    orig_dtype = x.dtype
+    x = tf.cast(x, tf.float32)
+    x -= tf.reduce_mean(x, axis=[2, 3], keepdims=True)
+    epsilon = tf.constant(epsilon, dtype=x.dtype, name='epsilon')
+    x *= tf.math.rsqrt(tf.reduce_mean(tf.square(x),
+                                 axis=[2, 3], keepdims=True) + epsilon)
+    x = tf.cast(x, orig_dtype)
+    return x
+
+# specific implementation taken from https://github.com/ialhashim/StyleGAN-Tensorflow2/blob/master/stylegan.py,
+# a tensorflow2 reimplementation. The official repo is in TF1.
+
 
 # ==============================================================================
 #                  Spatial Pyramid Attentive Pooling
 #
 #        Attempting to implement https://arxiv.org/pdf/1901.06322.pdf
 # ==============================================================================
-norm='instance_norm'
-Norm = _get_norm_layer(norm)
+# norm='instance_norm'
+# Norm = _get_norm_layer(norm)
 
 def _attentive_fuse(a, b, network):
     dim = a.shape[-1]
     n = tf.concat([a, b], 3)
     n = keras.layers.Conv2D(
-        dim, 1, strides=1, padding='same', use_bias=False)(n)
-    n = Norm()(n)
+        dim, 2, strides=1, padding='same', use_bias=False)(n)
+    n = Norm(n)
     if network == "g":
         n = tf.nn.relu(n)
     else:
@@ -39,16 +59,18 @@ def _attentive_fuse(a, b, network):
     b = keras.layers.multiply([b, n])
     return keras.layers.add([a, b])
 
+
 def _dilated_conv(a, level, network):
     dim = a.shape[-1]
     a = keras.layers.Conv2D(
         dim, 1, strides=1, dilation_rate=level, padding='same', use_bias=False)(a)
-    a = Norm()(a)
+    a = Norm(a)
     if network == "g":
         a = tf.nn.relu(a)
     else:
         a = tf.nn.leaky_relu(a)
     return a
+
 
 def spap(h, iterations, network):
     x = h
@@ -61,39 +83,27 @@ def spap(h, iterations, network):
 
     x = keras.layers.add([x, h])
     return x
-# ==============================================================================
 
+
+def spap_rev(h, iterations, network):
+    x = h
+    dim = x.shape[-1]
+    x = _dilated_conv(h, 1, network)
+    levels = 2
+    while levels <= iterations:
+        x = _attentive_fuse(x, _dilated_conv(h, levels, network), network)
+        levels += 1
+
+    x = keras.layers.add([x, h])
+    return x
+# ==============================================================================
 
 
 def ResnetGenerator(input_shape=(512, 512, 4),
                     output_channels=4,
                     dim=64,
-                    n_downsamplings=2, # originally 2
-                    n_blocks=8,  # originally 9. Irrelevant with SPAP.
+                    n_downsamplings=1,  # originally 2
                     norm='instance_norm'):
-
-
-
-    def _residual_block(x):
-        dim = x.shape[-1]
-        h = x
-
-        h = tf.pad(h, [[0, 0], [1, 1], [1, 1], [0, 0]], mode='REFLECT')
-        h = keras.layers.Conv2D(dim, 3, padding='valid', use_bias=False)(h)
-        # This first layer is designed to "see" the small-scale structure of the
-        # input.
-        h = Norm()(h)
-        h = tf.nn.relu(h)
-
-        h = tf.pad(h, [[0, 0], [2, 2], [2, 2], [0, 0]], mode='REFLECT')
-        # h = keras.layers.Conv2D(dim, 3, padding='valid', use_bias=False)(h)
-        # Modifying this layer to add a stride of 2, so that it can "see" the
-        # large scale structure of the input.
-        h = keras.layers.Conv2D(dim, 3, padding='valid',
-                                dilation_rate=2, use_bias=False)(h)
-        h = Norm()(h)
-
-        return keras.layers.add([x, h])
 
     # 0
     h = inputs = keras.Input(shape=input_shape)
@@ -105,41 +115,38 @@ def ResnetGenerator(input_shape=(512, 512, 4),
     # 1
     h = tf.pad(h, [[0, 0], [3, 3], [3, 3], [0, 0]], mode='REFLECT')
     h = keras.layers.Conv2D(dim, 7, padding='valid', use_bias=False)(h)
-    h = Norm()(h)
+    h = Norm(h)
     h = tf.nn.relu(h)
 
     # 2
     for _ in range(n_downsamplings):
         dim *= 2
         h = keras.layers.Conv2D(
-            dim, 3, strides=2, padding='same', use_bias=False)(h)
-        h = Norm()(h)
+                    dim, 3, strides=2, padding='same', use_bias=False)(h)
+        h = Norm(h)
         h = tf.nn.relu(h)
 
-    # 3
-    #
-    # for _ in range(n_blocks):
-    #      h = _residual_block(h)
-
     # 3 - replacing the residual block network with the SPAP network
-    h = spap(h, 5, "g")
+    h = spap(h, 3, "g")
+    h = Norm(h)
+    h = tf.nn.relu(h)
 
     # 4
     for _ in range(n_downsamplings):
         dim //= 2
         new_size = h.shape[1]
-        # h = keras.layers.Conv2DTranspose(dim, 3, strides=2, padding='same', use_bias=False)(h)
+        #h = keras.layers.Conv2DTranspose(dim, 3, strides=2, padding='same', use_bias=False)(h)
         h = tf.image.resize(h, (new_size * 2, new_size * 2),
                             tf.image.ResizeMethod.NEAREST_NEIGHBOR)
         h = keras.layers.Conv2D(dim, 3, strides=1, padding='same')(h)
-        h = Norm()(h)
+        h = Norm(h)
         h = tf.nn.relu(h)
 
     # 4.5 - reupscaling
     h = tf.image.resize(
-        h, (512, 512), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    h = keras.layers.Conv2D(dim,2,strides=1,padding='same')(h)
-    h = Norm()(h)
+            h, (512, 512), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+    h = keras.layers.Conv2D(dim, 2, strides=1, padding='same')(h)
+    h = Norm(h)
     h = tf.nn.relu(h)
 
     # 5
@@ -152,11 +159,10 @@ def ResnetGenerator(input_shape=(512, 512, 4),
 
 def ConvDiscriminator(input_shape=(512, 512, 4),
                       dim=64,
-                      # Originally 3. Increased due to increased input size.
                       n_downsamplings=4,
                       norm='instance_norm'):
     dim_ = dim
-    Norm = _get_norm_layer(norm)
+    # Norm = _get_norm_layer(norm)
 
     # 0
     h = inputs = keras.Input(shape=input_shape)
@@ -165,22 +171,25 @@ def ConvDiscriminator(input_shape=(512, 512, 4),
     h = keras.layers.Conv2D(dim, 4, strides=2, padding='same')(h)
     h = tf.nn.leaky_relu(h, alpha=0.2)
 
-    #for _ in range(n_downsamplings - 1):
-    #    dim = min(dim * 2, dim_ * 8)
-    #    h = keras.layers.Conv2D(
-    #        dim, 4, strides=2, padding='same', use_bias=False)(h)
-    #    h = Norm()(h)
-    #    h = tf.nn.leaky_relu(h, alpha=0.2)
+    for _ in range(n_downsamplings - 1):
+        dim = min(dim * 2, dim_ * 8)
+        h = keras.layers.Conv2D(
+            dim, 4, strides=2, padding='same', use_bias=False)(h)
+        h = Norm(h)
+        h = tf.nn.leaky_relu(h, alpha=0.2)
 
+    # 1.5
 
-    h = spap(h,3, "d")
+    h = spap(h,2, "d")
+    h = Norm(h)
+    h = tf.nn.leaky_relu(h, alpha=0.2)
 
     # 2
-    # dim = min(dim * 2, dim_ * 8)
-    # h = keras.layers.Conv2D(
-    #    dim, 4, strides=1, padding='same', use_bias=False)(h)
-    # h = Norm()(h)
-    # h = tf.nn.leaky_relu(h, alpha=0.2)
+    dim = min(dim * 2, dim_ * 8)
+    h = keras.layers.Conv2D(
+        dim, 4, strides=1, padding='same', use_bias=False)(h)
+    h = Norm(h)
+    h = tf.nn.leaky_relu(h, alpha=0.2)
 
     # 3
     h = keras.layers.Conv2D(1, 4, strides=1, padding='same')(h)
