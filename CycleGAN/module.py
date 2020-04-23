@@ -42,7 +42,7 @@ def _attentive_fuse(a, b, network):
 def _dilated_conv(a, level, network):
     dim = a.shape[-1]
     a = keras.layers.Conv2D(
-        dim, 2, strides=1, dilation_rate=level, padding='same', use_bias=False)(a)
+        dim, 1, strides=1, dilation_rate=level, padding='same', use_bias=False)(a)
     a = Norm()(a)
     if network == "g":
         a = tf.nn.relu(a)
@@ -68,8 +68,8 @@ def spap(h, iterations, network):
 def ResnetGenerator(input_shape=(512, 512, 4),
                     output_channels=4,
                     dim=64,
-                    n_downsamplings=2,
-                    n_blocks=8,  # originally 9
+                    n_downsamplings=2, # originally 2
+                    n_blocks=8,  # originally 9. Irrelevant with SPAP.
                     norm='instance_norm'):
 
 
@@ -122,7 +122,7 @@ def ResnetGenerator(input_shape=(512, 512, 4),
     #      h = _residual_block(h)
 
     # 3 - replacing the residual block network with the SPAP network
-    h = spap(h, 3, "g")
+    h = spap(h, 5, "g")
 
     # 4
     for _ in range(n_downsamplings):
@@ -138,6 +138,9 @@ def ResnetGenerator(input_shape=(512, 512, 4),
     # 4.5 - reupscaling
     h = tf.image.resize(
         h, (512, 512), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+    h = keras.layers.Conv2D(dim,2,strides=1,padding='same')(h)
+    h = Norm()(h)
+    h = tf.nn.relu(h)
 
     # 5
     h = tf.pad(h, [[0, 0], [3, 3], [3, 3], [0, 0]], mode='REFLECT')
@@ -169,14 +172,15 @@ def ConvDiscriminator(input_shape=(512, 512, 4),
     #    h = Norm()(h)
     #    h = tf.nn.leaky_relu(h, alpha=0.2)
 
+
     h = spap(h,3, "d")
 
     # 2
-    dim = min(dim * 2, dim_ * 8)
-    h = keras.layers.Conv2D(
-        dim, 4, strides=1, padding='same', use_bias=False)(h)
-    h = Norm()(h)
-    h = tf.nn.leaky_relu(h, alpha=0.2)
+    # dim = min(dim * 2, dim_ * 8)
+    # h = keras.layers.Conv2D(
+    #    dim, 4, strides=1, padding='same', use_bias=False)(h)
+    # h = Norm()(h)
+    # h = tf.nn.leaky_relu(h, alpha=0.2)
 
     # 3
     h = keras.layers.Conv2D(1, 4, strides=1, padding='same')(h)

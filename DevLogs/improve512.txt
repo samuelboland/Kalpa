@@ -1,0 +1,249 @@
+================================================================================
+Experiment 1: SPAP Network + Convolution at final resize
+================================================================================
+
+This branch continues the work started on the largerInput branch to make the
+network perform better while operating at a 512x512 output resolution. 
+
+Currently, the SPAP network suffers from cyclical mode collapse in the A2B
+generator. It somehow recovers itself, which is...odd.  
+
+I am however seeing some very persistent artifacts appear. This is happening
+regardless of whether I'm using the Resnet/Patch architecture from the original
+network, or the new SPAP network (which I still prefer, conceptually). 
+
+I would like to try getting rid of this. My first attempt at doing so will be
+via the additional of a convolution layer immediately after the final upsize in
+the Generator network. I'm thinking that I'll do a kernel of 2 and a stride of
+1, with same padding. I'm hoping that this has the effect of completely
+eliminating the remnants of checkerboarding that I banished by changing all of
+my Conv2dTranspose modules into resize+conv2d modules. 
+
+Anyways, giving it a shot now. 
+
+Results: After letting this run to completion overnight, the results were pretty
+alright. There was no mode collapse after 200 epochs, which is good. The A
+discriminator and B2A generator eventually settled into a nice equilibrium. The
+B disriminator on the other hand stayed pretty low. The network seems to be
+having some trouble translating the images from A (diffuse) to B (normal). 
+
+My next experiment will be the same as this one, but I will increase the levels
+of the perceptual pyramid  in the generator from 3 to 5. The paper that I based
+that on used 5, so I'm going to copy that now.
+
+================================================================================
+Experiment 2: A taller Pyramid
+================================================================================
+The same as the above experiment, expect that SPAP levels in the Generator have
+been increased to 5. 
+
+Results: Wow that's awful. It's just a giant purple field. I think it's not
+capable of getting the fine features this way. 
+
+I'm going to try lowering it to 4. 
+
+--------------------------------------------------------------------------------
+Experiment 2.5: A slightly less taller pyramid
+--------------------------------------------------------------------------------
+ 
+This is also performing very poorly. Hm. 
+
+================================================================================
+Experiment 3: SPAP + WGAN Adversarial Loss 
+================================================================================
+
+This cyclic behavior in the discriminator is very strange to me. I'd like to try
+out what happens if I introduce a different way of measure adversarial loss. I
+will now reintroduce the WGAN Adversarial Loss function - the first time that
+the SPAP network has seen it. 
+
+I am returning all other variables to be identical to experiment 1. 
+
+So far this is doing incredibly poorly. Far worse than the previous attempts.
+Something is off between the balance of the generator and discriminator. 
+
+Let's try returning the discriminator to the PatchGAN, but keeping SPAP in the
+Generator and implementing WGAN. 
+
+
+================================================================================
+Experiment 4: Removing additional PatchGAN code from Discriminator
+================================================================================
+When working on another experiment, I noticed that the discriminator still
+contained possible remnants of the PatchGAN network. I have removed those. The
+discriminator now looks like this:
+
+Input -> Conv2D(d64, k4, s2 ->) SPAP(3) -> conv2d(d1,k4,s1) 
+
+Results at 6%: This seems to have eliminated the cyclical bouncing so far! I'll
+keep an eye on this. 
+
+One fundamental issue that I'm going to keep running into is that the
+discriminator cares about color. When translating Diffuse -> Normal -> Diffuse,
+it measures the closeness of A and A2B2A, and part of that measurement is how
+close the color is. That means that the A2B translator must somehow encode the
+original color in the normal map that it generates. This information isn't
+necessary, and will always lead to odd artifacts. I will keep this in the back
+of my mind. 
+
+Results: This is performing well. I will now attempt a sub-experiment,
+completely removing the other pieces of the old PatchGAN architecture in the
+discriminator. 
+
+--------------------------------------------------------------------------------
+Experiment 4.1: Removing almost all original code from the discriminator
+--------------------------------------------------------------------------------
+I have removed the remainder of the original code. All that was left was a
+conv2d transforming the input to a 64-depth tensor with stride 2 and kernel 4.
+Now the input is immediately sent to the SPAP network, and then funnelled into a
+depth-1 venctor at the end. 
+
+The architecture is now: 
+
+Input -> SPAP(3) -> conv2d(d1,k4,s1)
+
+Starting off, this is far worse. The generator is making super blobby results
+with bad colors. Since the generator architecture didn't change at all, the
+different here lies squarely in the discriminator doing worse. 
+
+This experiment is a failure - but perhaps some additional tweaking in the
+discriminator is still in order. 
+
+--------------------------------------------------------------------------------
+Experiment 4.2: Deepening SPAP network in discriminator
+--------------------------------------------------------------------------------
+
+This experiment reverts the change in Exp4.1. The architecture is now:
+
+input -> Conv2d(d64,k4,s2) -> SPAP(4) -> conv2d(d1,k4,s1) 
+
+This is also returning blobby images. Interesting. 
+
+--------------------------------------------------------------------------------
+Experiment 4.3: Making SPAP in discriminator more shallow
+--------------------------------------------------------------------------------
+
+If a deeper SPAP in the discriminator makes it worse...does a more shallow one
+make it better? That seems odd. But let's see. 
+
+Same architecture as Exp 4.3, but with SPAP(2) instead. 
+
+It's taking longer, but it's semi-sort-of coalescing on kind of decent images. I
+suppose it makes sense that this is harder - there are more layers to train. 
+
+Some of my reading indicates that one of the benefits of the Residual Network
+and PatchGAN are their relatively quick convergence despite their depth. 
+
+After 44%, it's still exhibiting this blockiness, which I really don't like.
+It's almost like it can't find the fine detail...and I wonder if it has
+something to do with the Generator. 
+
+================================================================================
+Experiment 5:  Altering Downsamples in Generator
+================================================================================
+ 
+This is a bit of a shot in the dark, but I'm going to try altering the Generator
+code to be analogous to the Discriminator code. Right now, the Generator is
+performing a number of  Down and Up-sampling operations. The architecture is
+currently: 
+
+input -> resize(256) -> downsample*2 -> SPAP(3) -> Upsample*2 -> Resize(512)
+
+What if I change the number of down/upsamples to 1 instead? 
+
+Trying that now. The network appears to be stable. Neither the Generators nor
+the Discriminators have gained the upper hand. The generators are successfully
+pulling out the large and small scale features of the input images. I can
+claerly see the outlines or the bricks, and the interiors of the bricks are
+filled in with single colors. The colors are wrong, but hopefully it can learn
+to correct that. 
+
+I keep running out of memory now. Damn. 
+
+================================================================================
+Experiment 6: WGAN Loss Mode
+================================================================================
+
+I am reverting the changes done in Experiment 5, and attempting to add the WGAN
+method of measuring adversarial loss. This is basically experiment 4 + WGAN. 
+
+Generator Architecture: 
+
+Input -> resize(256) -> conv2d(d64,k7,s1) -> 2*downsample ->
+SPAP(3)->2*upsample -> upsize-reconv(512) -> conv2d(d4,k7,s1)
+
+Discriminator Architecture:
+
+Input -> conv2d(d64,k4,s2) -> spap(4) -> conv2d(d1,k4,s1)
+
+Loss mode = WGAN
+
+Wow. This is EXTREMELY bad. It started out vaguely okayish and is now just going
+off to pure randomland. How weird. It makes for some cool looking designs
+though. This is what it looks like when a computer has nightmares. 
+
+I'm going to let it run though. I know that the deeper discriminator that I'm
+using takes some time to initialize. Let's give it a few dozen epochs. 
+
+
+================================================================================
+Experiment 7: Enabling WGAN-GP
+================================================================================
+
+The WGAN Gradient Penalty is supposedly a way to help stop a regular WGAN from
+careening off into randomland. 
+
+Adding WGAN-GP to it. First attempt resulted in immediate Out of Memory errors.
+Lowering SPAP depth in discriminator to 3. 
+
+Wow. This is having an impressive impact on restraining the losses. That's
+amazing. 
+
+I wonder if it's _too_ good at converging. The discriminator and generator loss
+values are both incredibly close to zero, and just dance around there. There is
+little pressure for them to get better. I wonder if they even _are_ improving. 
+
+Ah, I've reached a failure mode. The GAN is just generating inverse images. 
+
+Apparently, adding an Identity weight can help with this. I'll do that. 
+
+================================================================================
+Experiment 8: Identity Loss Weight
+================================================================================
+
+Same as Exp 7, but with ID Loss weight = 10
+
+This is actually working out pretty well. The A->B generator is looking good. 
+
+I'm still getting these black holes. I'm going to try bumping the Identity
+weight to 50. Let's see if I can knock this out completely.
+
+--------------------------------------------------------------------------------
+Experiment 8.1: Identity Loss Weight 50 + G SPAP 5
+--------------------------------------------------------------------------------
+
+I am also going to try increasing the depth of the SPAP network to 5. 
+
+Early network, the SPAP is having trouble generating a coherent image. I'm
+curious to see if it can recover - the WGAN and WGAN-GP methods provide strong
+incentives to get find equilibrium. It's basically just generating a giant
+blob...hm. 
+
+Trying with a Kernel Size of 1. 
+
+--------------------------------------------------------------------------------
+Experiment 8.2: ID Loss 50, G SPAP 5, Kernel Size = 1 
+--------------------------------------------------------------------------------
+
+Oof, running out of VRAM. 
+
+Epoch 3: It's starting to vaguely begin to generate some structure instead of a
+blank image made out of the average color. 
+
+================================================================================
+Experiment ?: A TON of images
+================================================================================
+
+Just for kicks, I'm going to try training this new network on a GIANT group of
+textures. I just went through and did some light paring down of them. I expect
+it to do poorly, but let's try! 
